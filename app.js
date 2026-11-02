@@ -49,14 +49,34 @@
         const d = JSON.parse(raw);
         if (d && d.version === 2 && Array.isArray(d.terms) && d.terms.length) return d;
       }
+    } catch (err) {
+      console.warn('主数据读取失败', err);
+    }
+
+    // 主数据没了或被写坏了，试试镜像
+    try {
+      const bak = localStorage.getItem(STORE + '.bak');
+      if (bak) {
+        const d = JSON.parse(bak);
+        if (d && d.version === 2 && Array.isArray(d.terms) && d.terms.length) {
+          console.warn('已从本地镜像恢复');
+          return d;
+        }
+      }
+    } catch (err2) {
+      console.warn('镜像也读不出来', err2);
+    }
+
+    try {
       const legacy = localStorage.getItem(LEGACY);
       if (legacy) {
         const o = JSON.parse(legacy);
         if (o && o.term && Array.isArray(o.courses)) return migrate(o);
       }
-    } catch (err) {
-      console.warn('本地数据读取失败，改用示例数据', err);
+    } catch (err3) {
+      console.warn('旧版数据读取失败', err3);
     }
+
     return seed();
   }
 
@@ -133,9 +153,26 @@
 
   function save() {
     try {
-      localStorage.setItem(STORE, JSON.stringify(store));
+      store.meta = store.meta || {};
+      store.meta.savedAt = new Date().toISOString();
+      const raw = JSON.stringify(store);
+      localStorage.setItem(STORE, raw);
+      // 再存一份镜像：主数据读不出来时还能救一次
+      localStorage.setItem(STORE + '.bak', raw);
     } catch (err) {
-      toast('保存失败：浏览器存储空间可能已满');
+      toast('保存失败：浏览器存储不可用（无痕模式？）');
+    }
+  }
+
+  function storageWritable() {
+    try {
+      const k = '__jkb_test__';
+      localStorage.setItem(k, '1');
+      const ok = localStorage.getItem(k) === '1';
+      localStorage.removeItem(k);
+      return ok;
+    } catch (err) {
+      return false;
     }
   }
 
@@ -555,6 +592,9 @@
       '<button class="kv" data-act="csv-export"><span>导出 CSV</span><span class="muted">给 Excel ›</span></button>' +
       '<button class="kv" data-act="ics-export"><span>导出到系统日历</span><span class="muted">.ics ›</span></button>' +
       '<button class="kv danger-text" data-act="clear-term"><span>清空本学期数据</span><span class="muted">不可撤销 ›</span></button>' +
+      (st.courses > 0 && !(store.meta && store.meta.exportedAt)
+        ? '<div class="warn small">还没备份过。浏览器清缓存、换手机、或者系统自动清理，数据会一起没掉。建议现在导出一份。</div>'
+        : '') +
       '</section>';
 
     html += '<section class="card"><h3>课表设置</h3>' +
@@ -573,9 +613,17 @@
       '<button data-act="theme" data-theme="dark" class="' + (theme === 'dark' ? 'on' : '') + '">深色</button>' +
       '</div></section>';
 
+    const canWrite = storageWritable();
+    const savedAt = store.meta && store.meta.savedAt
+      ? new Date(store.meta.savedAt).toLocaleString('zh-CN', { hour12: false })
+      : '—';
+
     html += '<section class="card about"><h3>关于</h3>' +
-      '<p>简课表 v2.0 · 数据只存在这台设备上，不联网、不上传。</p>' +
+      '<p>简课表 v2.1 · 数据只存在这台设备上，不联网、不上传。</p>' +
       '<p class="muted">调课记录 ' + st.adjustments + ' 条 · 排课 ' + st.sessions + ' 条</p>' +
+      '<div class="kv static"><span>本机存储</span><span class="muted">' +
+      (canWrite ? '可写入' : '不可写入 · 可能在无痕模式') + '</span></div>' +
+      '<div class="kv static"><span>上次保存</span><span class="muted">' + esc(savedAt) + '</span></div>' +
       '</section>';
 
     html += '</div>';
@@ -1234,6 +1282,9 @@
   /* ================= 备份 ================= */
 
   function backupExport() {
+    store.meta = store.meta || {};
+    store.meta.exportedAt = new Date().toISOString();
+    save();
     const d = new Date();
     const name = '简课表备份-' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2) + '.json';
     download(name, JSON.stringify(store, null, 2), 'application/json');
@@ -1580,6 +1631,8 @@
         store = d;
         viewTermId = store.activeTermId = d.activeTermId || d.terms[0].id;
         week = clampWeek(currentWeekOf(term()));
+        store.meta = store.meta || {};
+        store.meta.exportedAt = new Date().toISOString();
         save(); render(); toast('已从备份恢复');
       } catch (e) {
         toast('这个文件不是有效的备份');

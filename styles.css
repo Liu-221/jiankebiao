@@ -581,6 +581,13 @@ body.dragging .grid { touch-action: none; }
 
 html[data-theme="dark"] .warn { background: #3A2F1C; color: #F0C177; }
 
+.warn.small {
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 9px 11px;
+  margin: 4px 0 12px;
+}
+
 .rows { display: flex; flex-direction: column; gap: 8px; }
 .row { display: flex; gap: 8px; }
 
