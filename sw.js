@@ -1,5 +1,5 @@
 ﻿/* 离线缓存。改了代码记得把 VERSION 加一，否则手机会一直用旧的。 */
-const VERSION = 'jiankebiao-v4';
+const VERSION = 'jiankebiao-v5';
 
 const ASSETS = [
   './',

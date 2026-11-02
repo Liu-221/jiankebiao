@@ -380,7 +380,9 @@
       el.className = 'time-cell';
       el.style.gridColumn = '1';
       el.style.gridRow = String(idx + 2);
-      el.innerHTML = '<span class="p">' + p.i + '</span><span class="t">' + p.start + '</span>';
+      el.innerHTML = '<span class="p">' + p.i + '</span>' +
+        '<span class="t">' + p.start + '</span>' +
+        '<span class="te">' + p.end + '</span>';
       grid.appendChild(el);
     });
 
@@ -587,15 +589,22 @@
     const t = term();
     const c = slot.course;
     const siblings = t.sessions.filter((s) => s.courseId === slot.courseId);
+    const spanText = (s) => {
+      const a = store.periods[s.start - 1], b = store.periods[s.end - 1];
+      return WEEKDAYS[s.weekday - 1] + ' ' + s.start + '-' + s.end + ' 节' +
+        (a && b ? '（' + a.start + '–' + b.end + '）' : '');
+    };
     const original = siblings.length
-      ? siblings.map((s) => WEEKDAYS[s.weekday - 1] + ' ' + s.start + '-' + s.end + ' 节').join('，')
+      ? siblings.map(spanText).join('，')
       : '临时补课';
+    const nowSpan = spanText(slot);
 
     const adjusted = slot.adjusted || (slot.sessionId && t.adjustments.some(
       (a) => a.sessionId === slot.sessionId && Engine.hasWeek(a.weeks, week)));
 
     let html = '<h3>' + esc(c.name) + '</h3>' +
       '<div class="meta">' + esc(c.teacher || '教师待定') + ' · ' + esc(c.location || '地点待定') +
+      '<br>本周：' + esc(nowSpan) +
       '<br>原安排：' + esc(original) + (adjusted ? '<br>本周已调整' : '') + '</div>';
 
     html += '<div class="rows">';
@@ -1019,6 +1028,7 @@
         '<div class="ri-actions">' +
         (isView ? '' : '<button class="link-btn" data-act="term-view" data-id="' + t.id + '">查看</button>') +
         (isActive ? '' : '<button class="link-btn" data-act="term-active" data-id="' + t.id + '">设为当前</button>') +
+        '<button class="link-btn" data-act="term-edit" data-id="' + t.id + '">编辑</button>' +
         (store.terms.length > 1 ? '<button class="link-btn danger" data-act="term-del" data-id="' + t.id + '">删除</button>' : '') +
         '</div></div>';
     });
@@ -1028,17 +1038,79 @@
     openSheet(html);
   }
 
-  function termForm() {
+  function openTermForm(termObj) {
+    const editing = !!termObj;
     const d = todayDate();
-    const guess = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
-    openSheet('<h3>新建学期</h3>' +
-      '<form data-form="term">' +
-      '<div class="field"><label>学期名称</label><input name="name" required value="2026-2027-2" autocomplete="off"></div>' +
-      '<div class="field"><label>开学日期（第 1 周周一）</label><input name="start" type="date" value="' + guess + '" required></div>' +
-      '<div class="field"><label>总周数</label><input name="weeks" type="number" min="1" max="31" value="20"></div>' +
-      '<div class="hint" style="margin:-4px 0 14px">新学期的课表是空的，可以用导入功能搬过去。</div>' +
-      '<div class="rows"><button class="btn primary" type="submit">创建</button>' +
+    const guess = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' +
+      ('0' + d.getDate()).slice(-2);
+    const t = termObj || { name: '', startDate: guess, totalWeeks: 20 };
+
+    openSheet('<h3>' + (editing ? '编辑学期' : '新建学期') + '</h3>' +
+      '<div class="meta">开学日期填**第 1 周的周一**，课表的周次和日期都从这里推算。</div>' +
+      '<form data-form="term-save"' + (editing ? ' data-id="' + t.id + '"' : '') + '>' +
+      '<div class="field"><label>学期名称</label><input name="name" required value="' + esc(t.name) +
+      '" placeholder="2026-2027-1" autocomplete="off"></div>' +
+      '<div class="field"><label>开学日期（第 1 周周一）</label>' +
+      '<input name="start" type="date" value="' + t.startDate + '" required></div>' +
+      '<div class="field"><label>总周数</label>' +
+      '<input name="weeks" type="number" min="1" max="31" value="' + t.totalWeeks + '"></div>' +
+      '<div class="hint" style="margin:-4px 0 14px">按今天算，这个设置下是**第 ' +
+      Math.min(Math.max(Engine.weekOf({ startDate: t.startDate }, todayDate()), 1), t.totalWeeks) +
+      ' 周**。改开学日期就能把周次对齐到真实校历。</div>' +
+      '<div class="rows"><button class="btn primary" type="submit">' +
+      (editing ? '保存' : '创建') + '</button>' +
       '<button class="btn" type="button" data-act="close">取消</button></div></form>');
+  }
+
+  function saveTerm(form) {
+    const f = form.elements;
+    const name = f['name'].value.trim();
+    const start = f['start'].value;
+    const total = Math.min(Math.max(parseInt(f['weeks'].value, 10) || 20, 1), 31);
+    if (!name) return toast('学期名称不能为空');
+    if (!start) return toast('请选择开学日期');
+
+    const id = form.dataset.id;
+    if (id) {
+      const t = store.terms.filter((x) => x.id === id)[0];
+      if (!t) return toast('找不到这个学期');
+
+      let maxWeek = 0;
+      t.sessions.forEach((s) => {
+        const w = Engine.weeksOf(s.weeks, 31);
+        if (w.length && w[w.length - 1] > maxWeek) maxWeek = w[w.length - 1];
+      });
+
+      const apply = () => {
+        t.name = name;
+        t.startDate = start;
+        t.totalWeeks = total;
+        if (term().id === id) week = clampWeek(currentWeekOf(t));
+        save();
+        closeSheet();
+        render();
+        toast('已保存 · 现在是第 ' + Engine.weekOf(t, todayDate()) + ' 周');
+      };
+
+      if (maxWeek > total) {
+        confirmSheet('缩短学期？',
+          '有课程排到了第 ' + maxWeek + ' 周，缩短到 ' + total + ' 周之后它们不会再显示。',
+          '仍要保存', apply);
+        return;
+      }
+      apply();
+      return;
+    }
+
+    const t = newTerm(name, start, total);
+    store.terms.push(t);
+    store.activeTermId = t.id;
+    viewTermId = t.id;
+    week = clampWeek(currentWeekOf(t));
+    save();
+    closeSheet();
+    render();
+    toast('学期已创建，去导入课表吧');
   }
 
   /* ================= 节次 ================= */
@@ -1051,10 +1123,28 @@
         '<input type="time" value="' + p.end + '" data-p="end" data-i="' + i + '">' +
         '</div>';
     });
-    openSheet('<h3>节次时间</h3><div class="meta">改完保存，课表左侧与日历导出都会跟着变。</div>' +
+    openSheet('<h3>节次与作息</h3>' +
+      '<div class="meta">共 ' + store.periods.length + ' 节。改完保存，课表左侧和日历导出会一起变。</div>' +
       '<div class="p-list">' + rows + '</div>' +
+      '<div class="p-toolbar">' +
+      '<button class="btn sm" data-act="period-add">＋ 加一节</button>' +
+      '<button class="btn sm" data-act="period-del">－ 减一节</button>' +
+      '</div>' +
       '<div class="rows"><button class="btn primary" data-act="period-save">保存</button>' +
       '<button class="btn" data-act="close">取消</button></div>');
+  }
+
+  function syncPeriodInputs() {
+    Array.prototype.forEach.call(sheetEl.querySelectorAll('input[data-p]'), (inp) => {
+      const i = parseInt(inp.dataset.i, 10);
+      if (store.periods[i] && inp.value) store.periods[i][inp.dataset.p] = inp.value;
+    });
+  }
+
+  function addMinutes(hhmm, delta) {
+    const p = String(hhmm || '08:00').split(':').map(Number);
+    let m = ((p[0] * 60 + (p[1] || 0) + delta) % 1440 + 1440) % 1440;
+    return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2);
   }
 
   /* ================= 放假周 ================= */
@@ -1383,7 +1473,11 @@
     'imp-apply': () => applyImport(),
 
     'term-manage': () => termSheet(),
-    'term-new': () => termForm(),
+    'term-new': () => openTermForm(null),
+    'term-edit': (el) => {
+      const t = store.terms.filter((x) => x.id === el.dataset.id)[0];
+      if (t) openTermForm(t);
+    },
     'term-view': (el) => {
       viewTermId = el.dataset.id;
       week = clampWeek(currentWeekOf(term()));
@@ -1410,6 +1504,30 @@
     },
 
     'period-edit': () => periodSheet(),
+    'period-add': () => {
+      if (store.periods.length >= 20) return toast('最多 20 节');
+      syncPeriodInputs();
+      const last = store.periods[store.periods.length - 1];
+      store.periods.push({
+        i: last.i + 1,
+        start: addMinutes(last.end, 10),
+        end: addMinutes(last.end, 55)
+      });
+      save();
+      periodSheet();
+      toast('已加到 ' + store.periods.length + ' 节，记得保存时间');
+    },
+    'period-del': () => {
+      if (store.periods.length <= 1) return toast('至少要保留一节');
+      const n = store.periods.length;
+      const used = store.terms.some((t) => t.sessions.some((s) => s.end >= n));
+      if (used) return toast('第 ' + n + ' 节还有课，先把它挪走再删');
+      syncPeriodInputs();
+      store.periods.pop();
+      save();
+      periodSheet();
+      toast('已减到 ' + store.periods.length + ' 节');
+    },
     'holiday-manage': () => holidaySheet(),
     'holiday-save': () => saveHolidays(),
     'holiday-off': (el) => {
@@ -1535,21 +1653,7 @@
     if (form.dataset.form === 'course') submitCourse(form);
     else if (form.dataset.form === 'makeup') applyMakeup(form);
     else if (form.dataset.form === 'override') saveOverride(form);
-    else if (form.dataset.form === 'term') {
-      const f = form.elements;
-      const name = f['name'].value.trim();
-      const start = f['start'].value;
-      const total = Math.min(Math.max(parseInt(f['weeks'].value, 10) || 20, 1), 31);
-      if (!name) return toast('学期名称不能为空');
-      if (!start) return toast('请选择开学日期');
-      const t = newTerm(name, start, total);
-      store.terms.push(t);
-      store.activeTermId = t.id;
-      viewTermId = t.id;
-      week = clampWeek(currentWeekOf(t));
-      save(); closeSheet(); render();
-      toast('学期已创建，去导入课表吧');
-    }
+    else if (form.dataset.form === 'term-save') saveTerm(form);
   });
 
   document.addEventListener('change', (e) => {
