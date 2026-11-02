@@ -543,8 +543,11 @@ var Engine = (function () {
       .replace(/,/g, '\\,').replace(/\n/g, '\\n');
   }
 
-  /* 每个「课次 × 周」生成一个事件：跨周、单双周、调课后的时间都能正确表达。 */
-  function toICS(term, periods) {
+  /* 每个「课次 × 周」生成一个事件：跨周、单双周、调课后的时间都能正确表达。
+   * opts.remindBefore 是提前多少分钟提醒（0 表示不加闹钟）。
+   */
+  function toICS(term, periods, opts) {
+    var remind = (opts && typeof opts.remindBefore === 'number') ? opts.remindBefore : 15;
     var out = [];
     out.push('BEGIN:VCALENDAR');
     out.push('VERSION:2.0');
@@ -571,6 +574,16 @@ var Engine = (function () {
         out.push('DESCRIPTION:' + icsEscape(
           (s.course.teacher ? s.course.teacher + ' · ' : '') + '第 ' + w + ' 周'
         ));
+        if (remind > 0) {
+          out.push('BEGIN:VALARM');
+          out.push('TRIGGER:-PT' + remind + 'M');
+          out.push('ACTION:DISPLAY');
+          out.push('DESCRIPTION:' + icsEscape(
+            s.course.name + ' ' + remind + ' 分钟后上课' +
+            (s.course.location ? '，' + s.course.location : '')
+          ));
+          out.push('END:VALARM');
+        }
         out.push('END:VEVENT');
       }
     }

@@ -569,6 +569,7 @@
     const t = term();
     const st = Engine.termStats(t);
     const theme = (store.settings && store.settings.theme) || 'auto';
+    const remind = (store.settings && typeof store.settings.remind === 'number') ? store.settings.remind : 15;
     const isCur = editable();
 
     let html = '<div class="pad">';
@@ -598,8 +599,10 @@
       '</section>';
 
     html += '<section class="card"><h3>课表设置</h3>' +
-      '<button class="kv" data-act="period-edit"><span>节次时间</span><span class="muted">' +
+      '<button class="kv" data-act="period-edit"><span>节次与作息</span><span class="muted">' +
       store.periods.length + ' 节 ›</span></button>' +
+      '<button class="kv" data-act="remind-edit"><span>课前提醒</span><span class="muted">' +
+      (remind === 0 ? '不提醒' : remind + ' 分钟前') + ' ›</span></button>' +
       '<button class="kv" data-act="holiday-manage"><span>放假周</span><span class="muted">' +
       ((t.holidays || []).length ? (t.holidays.length + ' 周放假') : '未设置') + ' ›</span></button>' +
       '<button class="kv" data-act="override-manage"><span>调休与补班</span><span class="muted">' +
@@ -1303,7 +1306,36 @@
 
   function icsExport() {
     const t = term();
-    download(t.name + '.ics', Engine.toICS(t, store.periods), 'text/calendar;charset=utf-8');
+    const mins = (store.settings && typeof store.settings.remind === 'number') ? store.settings.remind : 15;
+    download(t.name + '.ics',
+      Engine.toICS(t, store.periods, { remindBefore: mins }),
+      'text/calendar;charset=utf-8');
+    setTimeout(() => icsHelpSheet(mins), 500);
+  }
+
+  function icsHelpSheet(mins) {
+    openSheet('<h3>怎么让手机提醒你</h3>' +
+      '<div class="meta">刚导出的日历文件里，每节课都带了一个' +
+      (mins > 0 ? '「课前 ' + mins + ' 分钟」的闹钟' : '事件（当前设了不提醒）') + '。</div>' +
+      '<ol class="steps">' +
+      '<li>在「文件」App 或浏览器的下载列表里，点一下 <b>.ics</b> 文件</li>' +
+      '<li>选「添加到日历」，新建一个叫 <b>课表</b> 的日历</li>' +
+      '<li>之后每节课前，手机会弹提醒，锁屏上也能看到</li>' +
+      '<li>课表改过之后：重新导出，先把旧的「课表」日历删掉，再导入新的</li>' +
+      '</ol>' +
+      '<div class="meta">网页版自己发不了通知，这是 iOS 的限制，用系统日历最稳。</div>' +
+      '<div class="rows"><button class="btn primary" data-act="close">知道了</button></div>');
+  }
+
+  function remindSheet() {
+    const cur = (store.settings && typeof store.settings.remind === 'number') ? store.settings.remind : 15;
+    openSheet('<h3>课前提醒</h3>' +
+      '<div class="meta">只影响「导出到系统日历」。导出之后，系统日历会在每节课开始前提醒你。网页本身发不了通知。</div>' +
+      [0, 5, 10, 15, 30].map((m) =>
+        '<button class="kv" data-act="remind-set" data-min="' + m + '">' +
+        '<span>' + (m === 0 ? '不提醒' : m + ' 分钟前') + '</span>' +
+        '<span class="muted">' + (m === cur ? '✓ 当前' : '') + '</span></button>').join('') +
+      '<div class="rows" style="margin-top:12px"><button class="btn" data-act="close">关闭</button></div>');
   }
 
   /* ================= 拖拽调课 ================= */
@@ -1640,6 +1672,15 @@
     }),
     'csv-export': () => csvExport(),
     'ics-export': () => icsExport(),
+    'remind-edit': () => remindSheet(),
+    'remind-set': (el) => {
+      store.settings = store.settings || {};
+      store.settings.remind = parseInt(el.dataset.min, 10);
+      save();
+      closeSheet();
+      render();
+      toast(store.settings.remind ? '已设为课前 ' + store.settings.remind + ' 分钟提醒' : '已关闭课前提醒');
+    },
     'clear-term': () => confirmSheet('清空本学期数据？', '课程、排课、调课记录都会删除，课表回到空。', '清空', () => {
       const t = term();
       t.courses = []; t.sessions = []; t.adjustments = [];
